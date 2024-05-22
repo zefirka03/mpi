@@ -21,30 +21,6 @@ struct DeviceVertexInstance {
 };
 
 
-class Lab1_Solver : public Solver {
-public:
-    double solve(int cell_index, std::vector<Cell> const& cells, glm::vec2 a, double deltaTime) override {
-        double bound_u = 0.f;
-
-        auto& cell = cells[cell_index];
-
-        int c_up_i = cell.faces[Face::FaceDirection::up].neib_index;
-        int c_down_i = cell.faces[Face::FaceDirection::down].neib_index;
-        int c_left_i = cell.faces[Face::FaceDirection::left].neib_index;
-        int c_right_i = cell.faces[Face::FaceDirection::right].neib_index;
-
-        double c_up_u = c_up_i != CELL_NULL ? cells[c_up_i].u : bound_u;
-        double c_down_u = c_down_i != CELL_NULL ? cells[c_down_i].u : bound_u;
-        double c_left_u = c_left_i != CELL_NULL ? cells[c_left_i].u : bound_u;
-        double c_right_u = c_right_i != CELL_NULL ? cells[c_right_i].u : bound_u;
-
-        double x_comp = a.x >= 0.f ? cell.u - c_left_u : c_right_u - cell.u;
-        double y_comp = a.y >= 0.f ? cell.u - c_down_u : c_up_u - cell.u;
-
-        return cell.u - deltaTime * ((a.x * x_comp / cell.size.x) + (a.y * y_comp / cell.size.y));
-    }
-};
-
 class Lab2_Solver : public Solver {
 public:
     double solve(int cell_index, std::vector<Cell> const& cells, glm::vec2 a, double deltaTime) override {
@@ -113,6 +89,18 @@ public:
 
         Mesh mesh;
         mesh.unpack_locals(locals_buffer);
+
+        while(true){
+            mesh.iterate(0.1f);
+            printf("iterated by: %d\n", rank);
+
+            std::vector<std::byte> packed = mesh.pack_locals();
+            int32_t buffer_size = packed.size();
+            MPI_Send(&buffer_size, 1, MPI_INT32_T, 0, SLVR_MPI_TAG_LOCALS_ITERATION_COUNT, MPI_COMM_WORLD);
+            MPI_Send(packed.data(), buffer_size, MPI_BYTE, 0, SLVR_MPI_TAG_LOCALS_ITERATION, MPI_COMM_WORLD);
+            
+            printf("sended by: %d\n", rank);
+        }
 
         return 0;
     }
@@ -207,8 +195,8 @@ AIR_SHADER_VF);
         while (!glfwWindowShouldClose(m_window)) {
             glClear(GL_COLOR_BUFFER_BIT);
             if (glfwGetKey(m_window, GLFW_KEY_SPACE) == GLFW_PRESS) {
-                sol.iterate(0.25f);
-                sol.apply_to_texture(grid);
+                mesh.collect();
+                mesh.apply_to_texture(grid);
             }
 
             grid.bind_texture();

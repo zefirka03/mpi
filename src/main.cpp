@@ -4,16 +4,16 @@
 
 int main(int argc, char** argv) {
     int returned;
-    int process_Rank;
+    int process_rank;
 
     MPI_Init(&argc, &argv);
-    MPI_Comm_rank(MPI_COMM_WORLD, &process_Rank);
-
-    if (process_Rank == 0) {
+    MPI_Comm_rank(MPI_COMM_WORLD, &process_rank);
+    
+    if (process_rank == 0) {
         returned = Application::run_parent();
     }
     else {
-        returned = Application::run_child(process_Rank);
+        returned = Application::run_child(process_rank);
     }
 
     MPI_Finalize();

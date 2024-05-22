@@ -11,6 +11,8 @@
 
 #define SLVR_MPI_TAG_LOCALS_SEND_DATA_COUNT 1
 #define SLVR_MPI_TAG_LOCALS_SEND_DATA 2
+#define SLVR_MPI_TAG_LOCALS_ITERATION_COUNT 3
+#define SLVR_MPI_TAG_LOCALS_ITERATION 4
 
 
 struct Face {
@@ -55,6 +57,39 @@ public:
 };
 
 
+class Lab1_Solver : public Solver {
+public:
+    double solve(int cell_index, std::vector<Cell> const& cells, glm::vec2 a, double deltaTime) override {
+        double bound_u = 0.f;
+
+        if(cell_index >= cells.size()) return 1;
+
+        auto& cell = cells[cell_index];
+
+        int c_up_i = cell.faces[Face::FaceDirection::up].neib_index;
+        int c_down_i = cell.faces[Face::FaceDirection::down].neib_index;
+        int c_left_i = cell.faces[Face::FaceDirection::left].neib_index;
+        int c_right_i = cell.faces[Face::FaceDirection::right].neib_index;
+
+        if(c_up_i >= cells.size()) return 1;
+        if(c_down_i >= cells.size()) return 1;
+        if(c_left_i >= cells.size()) return 1;
+        if(c_right_i >= cells.size()) return 1;
+
+        double c_up_u = c_up_i != CELL_NULL ? cells[c_up_i].u : bound_u;
+        double c_down_u = c_down_i != CELL_NULL ? cells[c_down_i].u : bound_u;
+        double c_left_u = c_left_i != CELL_NULL ? cells[c_left_i].u : bound_u;
+        double c_right_u = c_right_i != CELL_NULL ? cells[c_right_i].u : bound_u;
+
+        double x_comp = a.x >= 0.f ? cell.u - c_left_u : c_right_u - cell.u;
+        double y_comp = a.y >= 0.f ? cell.u - c_down_u : c_up_u - cell.u;
+
+        return cell.u - deltaTime * ((a.x * x_comp / cell.size.x) + (a.y * y_comp / cell.size.y));
+    }
+};
+
+
+template<class _TSolver = Lab1_Solver>
 class Mesh {
 private:
     // Локальные ячейки
@@ -62,14 +97,16 @@ private:
     // Ячейки с других процессов
     std::vector<Cell> m_aliens; 
 
-    glm::vec2 m_grid_size;
     // Size of grid in world space
+
+    Solver* m_solver_instance = new _TSolver();
 
     int _get_new_rank(Cell const& cell){
         return 1 + int(cell.center.x / (m_grid_size.x / 2.f)) + 2 * int(cell.center.y / (m_grid_size.y / 2.f));
     }
 
 public:
+    glm::vec2 m_grid_size;
     Mesh() {}
 
     Mesh(
@@ -142,24 +179,72 @@ public:
 
     void redistribute() {
         std::unordered_map<int, std::vector<Cell>> rank_locals;
+        std::unordered_map<int, int> index_locindex;
+        index_locindex[CELL_NULL] = CELL_NULL;
 
         // just apply rank for every cell
         for(int i = 0; i < m_locals.size(); ++i){
             m_locals[i].rank = _get_new_rank(m_locals[i]);
+            index_locindex[m_locals[i].index] = rank_locals[m_locals[i].rank].size();
             rank_locals[m_locals[i].rank].push_back(m_locals[i]);
         }
 
+        // calculate face rank
+        for(int i = 0; i < m_locals.size(); ++i){
+            m_locals[i].faces[Face::FaceDirection::up].rank = m_locals[i].faces[Face::FaceDirection::up].neib_index != CELL_NULL ? m_locals[m_locals[i].faces[Face::FaceDirection::up].neib_index].rank : -1;
+            m_locals[i].faces[Face::FaceDirection::down].rank = m_locals[i].faces[Face::FaceDirection::down].neib_index != CELL_NULL ? m_locals[m_locals[i].faces[Face::FaceDirection::down].neib_index].rank : -1;
+            m_locals[i].faces[Face::FaceDirection::right].rank = m_locals[i].faces[Face::FaceDirection::right].neib_index != CELL_NULL ? m_locals[m_locals[i].faces[Face::FaceDirection::right].neib_index].rank : -1;
+            m_locals[i].faces[Face::FaceDirection::left].rank = m_locals[i].faces[Face::FaceDirection::left].neib_index != CELL_NULL ? m_locals[m_locals[i].faces[Face::FaceDirection::left].neib_index].rank : -1;
+        }
+
+        // recalculate local index for every cell and its faces
+        for(auto rank_data : rank_locals){
+            for(int i = 0; i < rank_data.second.size(); ++i){
+                rank_data.second[i].index = index_locindex[rank_data.second[i].index];
+
+                for(int f = 0; f < 4; ++f)
+                    rank_data.second[i].faces[f].neib_index = index_locindex[rank_data.second[i].faces[f].neib_index];
+            }
+        }
+
         // send locals data to every process
-        for (auto rank_it : rank_locals) {
+        for(auto rank_it : rank_locals) {
             int32_t buffer_size = rank_it.second.size() * sizeof(Cell);
             MPI_Send(&buffer_size, 1, MPI_INT32_T, rank_it.first, SLVR_MPI_TAG_LOCALS_SEND_DATA_COUNT, MPI_COMM_WORLD);
-            MPI_Send(rank_it.second.data(), rank_it.second.size() * sizeof(Cell), MPI_BYTE, rank_it.first, SLVR_MPI_TAG_LOCALS_SEND_DATA, MPI_COMM_WORLD);
+            MPI_Send(rank_it.second.data(), buffer_size, MPI_BYTE, rank_it.first, SLVR_MPI_TAG_LOCALS_SEND_DATA, MPI_COMM_WORLD);
         }
     }
 
     void exchange() {
-        for (int i = 0; i < m_locals.size(); ++i) {
+        for(int i = 0; i < m_locals.size(); ++i) {
             
+        }
+    }
+
+    void collect() {
+        size_t current_disp = 0;
+
+        for (int it = 1; it < 5; ++it) {
+            int32_t buffer_size;
+            MPI_Recv(&buffer_size, 1, MPI_INT32_T, it, SLVR_MPI_TAG_LOCALS_ITERATION_COUNT, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            MPI_Recv(m_locals.data() + (current_disp / sizeof(Cell)), buffer_size, MPI_BYTE, it, SLVR_MPI_TAG_LOCALS_ITERATION, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            current_disp += buffer_size;
+        }
+    }
+
+    void iterate(float deltaTime) {
+        for (int i = 0; i < m_locals.size(); ++i) {
+            // glm::vec2 a = m_speed_field(cell.center.x, cell.center.y);
+            glm::vec2 a(1);
+            auto& cell = m_locals[i];
+            //if(m_locals[i].faces[Face::FaceDirection::up].rank!=m_locals[i].rank ||
+            //m_locals[i].faces[Face::FaceDirection::down].rank!=m_locals[i].rank ||
+            //m_locals[i].faces[Face::FaceDirection::right].rank != m_locals[i].rank ||
+            //m_locals[i].faces[Face::FaceDirection::left].rank != m_locals[i].rank)
+            //    continue;
+            //printf("something");
+            cell.u_back = m_solver_instance->solve(i, m_locals, a, deltaTime);
+            std::swap(cell.u_back, cell.u);
         }
     }
 
@@ -179,6 +264,25 @@ public:
             );
         }
         
+        texture.update();
+    }
+
+    void apply_to_texture(GridTexture& texture) {
+        for (int i = 0; i < m_locals.size(); ++i) {
+            glm::vec2 relate_pos = m_locals[i].center / m_grid_size;
+
+            int x_p = int(relate_pos.x * texture.size().x);
+            int y_p = int(relate_pos.y * texture.size().y);
+
+            double color = std::max(0.0, std::min(255.0, 128 + m_locals[i].u * 255.f * 0.5));
+            texture.set_pixel(x_p, y_p, {
+                    uint8_t(color),
+                    uint8_t(color),
+                    uint8_t(color)
+                }
+            );
+        }
+
         texture.update();
     }
 
