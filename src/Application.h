@@ -11,8 +11,8 @@
 #include "Solution2.h"
 
 
-constexpr int WIDTH = 1280;
-constexpr int HEIGHT = 1280;
+constexpr int WIDTH = 800;
+constexpr int HEIGHT = 800;
 
 
 struct DeviceVertexInstance {
@@ -92,14 +92,11 @@ public:
 
         while(true){
             mesh.iterate(0.1f);
-            printf("iterated by: %d\n", rank);
 
             std::vector<std::byte> packed = mesh.pack_locals();
             int32_t buffer_size = packed.size();
             MPI_Send(&buffer_size, 1, MPI_INT32_T, 0, SLVR_MPI_TAG_LOCALS_ITERATION_COUNT, MPI_COMM_WORLD);
             MPI_Send(packed.data(), buffer_size, MPI_BYTE, 0, SLVR_MPI_TAG_LOCALS_ITERATION, MPI_COMM_WORLD);
-            
-            printf("sended by: %d\n", rank);
         }
 
         return 0;
@@ -161,13 +158,13 @@ AIR_SHADER_VF);
         vao.pushVBO(0, 0, 2, sizeof(DeviceVertexInstance), 0 * sizeof(GLfloat)).buffer(vert_data.data(), sizeof(DeviceVertexInstance) * vert_data.size());
         vao.pushVBO(0, 1, 2, sizeof(DeviceVertexInstance), 2 * sizeof(GLfloat));
 
-        int sz = 512;
+        int sz = 400;
         GridTexture grid(sz, sz);
 
-        Solution2 sol(512, 512.f, 512, 512,
+        Solution2 sol(400, 400, 400, 400,
             new Lab2_Solver(),
             [](double x, double y) -> double {
-                float sz = 512 * 0.5;
+                float sz = 400 * 0.5;
                 return
                     std::abs(x - sz) < 50 &&
                     std::abs(y - sz) < 50 ? 1 : 0.;
@@ -180,16 +177,14 @@ AIR_SHADER_VF);
                 return glm::vec2(1);
             });
 
-        Mesh mesh(512.f, 512.f, 512, 512,
+        Mesh mesh(400, 400, 400, 400,
             [](double x, double y) -> double {
-                float sz = 512 * 0.5;
-                return
-                    std::abs(x - sz) < 50 &&
-                    std::abs(y - sz) < 50 ? 1 : 0.;
+                float sz = 400 * 0.5;
+                return (x-sz)*(x-sz)+(y-sz)*(y-sz)<100*100 &&(x-sz)*(x-sz)+(y-sz)*(y-sz)>80*80?1:0;
             }
         );
         mesh.redistribute();
-        mesh.apply_to_texture_rank_map(grid);
+        mesh.apply_to_texture(grid);
 
         glClearColor(0.2, 0.2, 0.2, 0.2);
         while (!glfwWindowShouldClose(m_window)) {

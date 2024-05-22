@@ -71,11 +71,6 @@ public:
         int c_left_i = cell.faces[Face::FaceDirection::left].neib_index;
         int c_right_i = cell.faces[Face::FaceDirection::right].neib_index;
 
-        if(c_up_i >= cells.size()) return 1;
-        if(c_down_i >= cells.size()) return 1;
-        if(c_left_i >= cells.size()) return 1;
-        if(c_right_i >= cells.size()) return 1;
-
         double c_up_u = c_up_i != CELL_NULL ? cells[c_up_i].u : bound_u;
         double c_down_u = c_down_i != CELL_NULL ? cells[c_down_i].u : bound_u;
         double c_left_u = c_left_i != CELL_NULL ? cells[c_left_i].u : bound_u;
@@ -191,14 +186,13 @@ public:
 
         // calculate face rank
         for(int i = 0; i < m_locals.size(); ++i){
-            m_locals[i].faces[Face::FaceDirection::up].rank = m_locals[i].faces[Face::FaceDirection::up].neib_index != CELL_NULL ? m_locals[m_locals[i].faces[Face::FaceDirection::up].neib_index].rank : -1;
-            m_locals[i].faces[Face::FaceDirection::down].rank = m_locals[i].faces[Face::FaceDirection::down].neib_index != CELL_NULL ? m_locals[m_locals[i].faces[Face::FaceDirection::down].neib_index].rank : -1;
-            m_locals[i].faces[Face::FaceDirection::right].rank = m_locals[i].faces[Face::FaceDirection::right].neib_index != CELL_NULL ? m_locals[m_locals[i].faces[Face::FaceDirection::right].neib_index].rank : -1;
-            m_locals[i].faces[Face::FaceDirection::left].rank = m_locals[i].faces[Face::FaceDirection::left].neib_index != CELL_NULL ? m_locals[m_locals[i].faces[Face::FaceDirection::left].neib_index].rank : -1;
+            for(int f = 0; f < 4; ++f)
+                m_locals[i].faces[f].rank = m_locals[i].faces[f].neib_index != CELL_NULL ? m_locals[m_locals[i].faces[f].neib_index].rank : -1;
         }
 
+        /*Забавный факт: ошибка, которую я искал несколько часов и из-за которой программа, что я вам показывал в последний раз не работало, заключалась в том, что вместо auto нужно было использовать auto&. Иначе изменялась копия массива... Один символ*/
         // recalculate local index for every cell and its faces
-        for(auto rank_data : rank_locals){
+        for(auto& rank_data : rank_locals){
             for(int i = 0; i < rank_data.second.size(); ++i){
                 rank_data.second[i].index = index_locindex[rank_data.second[i].index];
 
@@ -222,12 +216,12 @@ public:
     }
 
     void collect() {
-        size_t current_disp = 0;
+        int32_t current_disp = 0;
 
         for (int it = 1; it < 5; ++it) {
             int32_t buffer_size;
             MPI_Recv(&buffer_size, 1, MPI_INT32_T, it, SLVR_MPI_TAG_LOCALS_ITERATION_COUNT, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-            MPI_Recv(m_locals.data() + (current_disp / sizeof(Cell)), buffer_size, MPI_BYTE, it, SLVR_MPI_TAG_LOCALS_ITERATION, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            MPI_Recv((std::byte*)m_locals.data() + current_disp, buffer_size, MPI_BYTE, it, SLVR_MPI_TAG_LOCALS_ITERATION, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
             current_disp += buffer_size;
         }
     }
@@ -237,12 +231,6 @@ public:
             // glm::vec2 a = m_speed_field(cell.center.x, cell.center.y);
             glm::vec2 a(1);
             auto& cell = m_locals[i];
-            //if(m_locals[i].faces[Face::FaceDirection::up].rank!=m_locals[i].rank ||
-            //m_locals[i].faces[Face::FaceDirection::down].rank!=m_locals[i].rank ||
-            //m_locals[i].faces[Face::FaceDirection::right].rank != m_locals[i].rank ||
-            //m_locals[i].faces[Face::FaceDirection::left].rank != m_locals[i].rank)
-            //    continue;
-            //printf("something");
             cell.u_back = m_solver_instance->solve(i, m_locals, a, deltaTime);
             std::swap(cell.u_back, cell.u);
         }
